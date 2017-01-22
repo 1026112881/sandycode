@@ -1,0 +1,80 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+
+
+command=Train
+deviceId = 1
+modelPath="./Test/seqcla.dnn"
+makeMode = false # set true to enable checkpointing
+#traceLevel=1
+vocabDim = 500000
+
+Train=[
+    action="train"
+    
+    BrainScriptNetworkBuilder=[
+        # LSTM params
+        lstmDim = 128
+        cellDim = 128
+
+        # model dims
+        numLabels = 20
+        vocabDim = $vocabDim$
+        embedDim = 300
+
+        # define the model, by composing layer functions
+        model = Sequential
+        (
+            EmbeddingLayer {embedDim} :  # load the pre-learned word embedding matrix
+			ConvolutionalLayer {32, 4, pad=true, activation=ReLU} :
+            RecurrentLSTMLayer {lstmDim, cellShape=cellDim, init="gaussian"} :
+            BS.Sequences.Last :
+            DenseLayer {numLabels, init="gaussian"}  # using "gaussian" for back compat/regresson tests only
+        )
+
+        # inputs
+        t = DynamicAxis{}
+        features = SparseInput {$vocabDim$, dynamicAxis=t}  # Input has shape (vocabDim,t) and is one-hot sparse
+        labels   = Input {numLabels}                  # Input has shape (numLabels,*) where all sequences in *=1
+
+        # apply model
+        z = model (features)
+
+        # Make sure the trainer understands that the time dimension of l3 is actually the same as that of labels.
+        zp = ReconcileDynamicAxis(z, labels)
+
+        # training criteria
+        ce  = CrossEntropyWithSoftmax (labels, zp)  // this is the training objective
+        err = ClassificationError     (labels, zp)  // this also gets tracked
+
+        # connect to system
+        featureNodes    = (features)
+        labelNodes      = (labels)
+        criterionNodes  = (ce)
+        evaluationNodes = (err)
+        outputNodes     = (z)
+    ]
+
+    SGD = [	
+        epochSize = 0
+        minibatchSize = 5000
+        maxEpochs = 5
+        momentumPerMB = 0.9
+        learningRatesPerMB = 0.1
+        # We are testing checkpointing, keep all checkpoint (.ckp) files
+        keepCheckPointFiles = false
+    ]
+
+    reader = [
+        readerType = "CNTKTextFormatReader"
+        #file = "$DataDir$/Train.txt"
+        file = "E:/hhuang/DSSM/Data/MockData.txt"
+		keepDataInMemory=true
+		
+        input = [
+            features = [ alias = "x" ; dim = $vocabDim$ ; format = "sparse" ]
+            labels =   [ alias = "y" ; dim = 20          ; format = "sparse" ]
+        ]
+   ]    
+]
