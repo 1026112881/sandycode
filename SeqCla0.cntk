@@ -3,13 +3,12 @@
 
 
 
-command=Train:Test
-deviceId = 0
+command=Train
+deviceId = 1
 modelPath="./Test/seqcla.dnn"
 makeMode = false # set true to enable checkpointing
-traceLevel=1
+#traceLevel=1
 vocabDim = 500000
-outputPath="./Test/R"
 
 Train=[
     action="train"
@@ -23,20 +22,13 @@ Train=[
         numLabels = 20
         vocabDim = $vocabDim$
         embedDim = 300
-        OneWordLookahead (x) = Splice (x : DelayLayer {T=-1} (x): DelayLayer {T=-2} (x))
-        BiRecurrentLSTMLayer {outDim} = {
-            F = RecurrentLSTMLayer {outDim, goBackwards=false}
-            G = RecurrentLSTMLayer {outDim, goBackwards=true}
-            apply (x) = Splice (F(x):G(x))
-        }.apply
+
         # define the model, by composing layer functions
         model = Sequential
         (
             EmbeddingLayer {embedDim} :  # load the pre-learned word embedding matrix
-            OneWordLookahead:
-            LinearLayer{lstmDim}:
-            #
-            RecurrentLSTMLayer {lstmDim} :
+			ConvolutionalLayer {32, 4, pad=true, activation=ReLU} :
+            RecurrentLSTMLayer {lstmDim, cellShape=cellDim, init="gaussian"} :
             BS.Sequences.Last :
             DenseLayer {numLabels, init="gaussian"}  # using "gaussian" for back compat/regresson tests only
         )
@@ -49,8 +41,6 @@ Train=[
         # apply model
         z = model (features)
 
-        error2= Abs(Abs(z)-1)
-
         # Make sure the trainer understands that the time dimension of l3 is actually the same as that of labels.
         zp = ReconcileDynamicAxis(z, labels)
 
@@ -61,15 +51,15 @@ Train=[
         # connect to system
         featureNodes    = (features)
         labelNodes      = (labels)
-        criterionNodes  = (error2:ce)
+        criterionNodes  = (ce)
         evaluationNodes = (err)
         outputNodes     = (z)
     ]
 
     SGD = [	
         epochSize = 0
-        minibatchSize = 1000
-        maxEpochs = 1
+        minibatchSize = 5000
+        maxEpochs = 5
         momentumPerMB = 0.9
         learningRatesPerMB = 0.1
         # We are testing checkpointing, keep all checkpoint (.ckp) files
@@ -78,7 +68,8 @@ Train=[
 
     reader = [
         readerType = "CNTKTextFormatReader"
-        file = "Sequence.txt"
+        #file = "$DataDir$/Train.txt"
+        file = "E:/hhuang/DSSM/Data/MockData.txt"
 		keepDataInMemory=true
 		
         input = [
@@ -87,25 +78,3 @@ Train=[
         ]
    ]    
 ]
-
-Test=[
-    action="write"
-    
-    BrainScriptNetworkBuilder=[
-        network=BS.Network.Load("$modelPath$")
-        t = DynamicAxis{}
-        outputNodes = (network.z)
-    ]
-
-    reader = [
-        readerType = "CNTKTextFormatReader"
-        file = "Sequence.txt"
-        keepDataInMemory=true
-        
-        input = [
-            features = [ alias = "x" ; dim = $vocabDim$ ; format = "sparse" ]
-            labels =   [ alias = "y" ; dim = 20          ; format = "sparse" ]
-        ]
-   ]    
-]
-
