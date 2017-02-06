@@ -59,9 +59,9 @@ def dic2str(dic):
 		s+=str(k)+":"+str(v)+" "
 	return s
 
-def main():
+def TriLetter_LSTM():
 	vocabfile="vocab.txt"
-	outputfile="qk.evaluation.ctf"
+	outputfile="qk.evaluation.2.ctf"
 	inputfile="D:/MS/data/hrs_update.288.tsv"
 	qi=0
 	ki=1
@@ -69,15 +69,30 @@ def main():
 	outf=open(outputfile,'w')
 
 	#Convert CDSSM Input
-	count=0
+	count=1
 	for line in open(inputfile):
 		line=line.strip()
 		ls=line.split('\t')
-		q=ls[qi]
-		k=ls[ki]
-		seqcodes=cdssmcode(q,vocab)
-		for dic in seqcodes:
-			outf.write(dic2str(dic)+"\n")
+		q='# '+ls[qi]+' #'
+		k='# '+ls[ki]+' #'
+		q_seqcodes=cdssmcode(q,vocab)
+		k_seqcodes=cdssmcode(k,vocab)
+
+		q_len=len(q_seqcodes)
+		k_len=len(k_seqcodes)
+
+		length=max(q_len,k_len)
+
+		for i in range(0,(int)(length)):
+			outf.write(str(count)+" ")
+			if i<q_len:
+				outf.write("|Q "+dic2str(q_seqcodes[i])+" ")
+			if i<k_len:
+				outf.write("|K "+dic2str((k_seqcodes[i]))+" ")
+			if i==0:
+				outf.write("|L 1")
+			outf.write("\n")
+
 		count+=1
 		if count%10000==0:
 			print(count)
@@ -129,4 +144,4 @@ def triletterCount():
 				print "%s: %s" % (key, value)
 
 
-triletterCount()
+TriLetter_LSTM()
