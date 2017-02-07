@@ -1,0 +1,161 @@
+# Copyright (c) Microsoft. All rights reserved.
+# Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+
+
+command=Train
+deviceId = 1
+modelPath="./data/model/qk.lstm.dnn"
+makeMode = false # set true to enable checkpointing
+traceLevel=0
+vocabDim = 50000
+outputPath="./data/model/Result"
+
+Train=[
+    action="train"
+    
+    BrainScriptNetworkBuilder=[
+        # LSTM params
+        lstmDim = 128
+        cellDim = 128
+
+        # model dims
+        featureDim = 64
+        vocabDim = $vocabDim$
+        embedDim = 300
+		
+		# Constant tensors
+		numNeg              = 3
+		CONST_GAMMA     = Constant(10)
+		CONST_SHIFT     = Constant(1)
+		CONST_NEG       = Constant(numNeg)
+		CONST_PAD_NEG   = Constant(0, rows=numNeg, cols=1)
+		CONST_PAD_POS   = Constant(1, rows=1, cols=1)
+		CONST_PAD       = Splice(CONST_PAD_POS : CONST_PAD_NEG, axis=1)
+		
+		
+        OneWordLookahead (x) = Splice (x : DelayLayer {T=-1} (x): DelayLayer {T=-2} (x))
+        BiRecurrentLSTMLayer {outDim} = {
+            F = RecurrentLSTMLayer {outDim, goBackwards=false}
+            G = RecurrentLSTMLayer {outDim, goBackwards=true}
+            apply (x) = Splice (F(x):G(x))
+        }.apply
+		
+		SequenceSum1 (z) = {
+			# define a recursive expression for \log(\sum_{i=1}^t \exp(z_i))
+			ZSum=Plus(z,PastValue (0, ZSum))
+		}.ZSum
+		
+		SequenceSum2 (z) = {
+			# define a recursive expression for \log(\sum_{i=1}^t \exp(z_i))
+			ZSum=Plus(z,PastValue (0, ZSum))
+		}.ZSum
+		
+        # define the model, by composing layer functions
+        qmodel = Sequential
+        (
+            #LinearLayer {embedDim} :  # load the pre-learned word embedding matrix
+            #OneWordLookahead:
+            DenseLayer {featureDim,activation=ReLU}:
+            #
+            RecurrentLSTMLayer {featureDim} :
+			SequenceSum1:
+            BS.Sequences.Last #:
+			#LayerNormalizationLayer:
+            #DenseLayer {featureDim, init="gaussian",activation=ReLU}  # using "gaussian" for back compat/regresson tests only
+        )
+        kmodel = Sequential
+        (
+            #LinearLayer {embedDim} :  # load the pre-learned word embedding matrix
+            
+			#OneWordLookahead:
+            DenseLayer {featureDim,activation=ReLU}:
+            #
+            RecurrentLSTMLayer {featureDim} :
+			SequenceSum2:
+            BS.Sequences.Last #:
+			#LayerNormalizationLayer:
+            #DenseLayer {featureDim,activation=ReLU}  # using "gaussian" for back compat/regresson tests only
+        )
+
+        # inputs
+        Qt = DynamicAxis{}
+		Kt = DynamicAxis{}
+        Q = SparseInput {$vocabDim$, dynamicAxis=Qt}  # Input has shape (vocabDim,t) and is one-hot sparse
+		K = SparseInput {$vocabDim$, dynamicAxis=Kt}  # Input has shape (vocabDim,t) and is one-hot sparse
+		
+        L   = Input {1}                  # Input has shape (numLabels,*) where all sequences in *=1
+
+        # apply model
+        Qf = qmodel(Q)
+		Kf = kmodel(K)
+
+        # Make sure the trainer understands that the time dimension of l3 is actually the same as that of labels.
+        Qfp = ReconcileDynamicAxis(Qf, L)
+		Kfp = ReconcileDynamicAxis(Kf, L)
+		
+		lf  = Times(CONST_PAD, L)
+		c   = CosDistanceWithNegativeSamples(Qfp, Kfp, CONST_SHIFT, CONST_NEG)
+		
+		# training criteria
+		ce  = CrossEntropyWithSoftmax(lf, Scale(CONST_GAMMA, c), tag="criterion")
+		err = ErrorPrediction         (lf, c)
+
+        # connect to system
+        #featureNodes    = (features)
+        #labelNodes      = (labels)
+        #criterionNodes  = (error2:ce)
+        evaluationNodes = (err)
+        #outputNodes     = (z)
+    ]
+
+    SGD = [	
+        epochSize = 0
+        minibatchSize = 10000
+        maxEpochs = 20
+        #momentumPerMB = 0.9
+        learningRatesPerMB = 0.5
+        # We are testing checkpointing, keep all checkpoint (.ckp) files
+    ]
+
+    reader = [
+        readerType = "CNTKTextFormatReader"
+        file = "./data/qk.train.ctf"
+		keepDataInMemory=true
+		randomize   = true
+		randomizationWindow = 1000000
+		
+        input = [
+            Q = [ dim = $vocabDim$ ; format = "sparse" ]
+            K = [ dim = $vocabDim$ ; format = "sparse" ]
+			L = [ dim = 1; format = "dense" ]
+        ]
+   ]    
+]
+
+Test=[
+    action="write"
+    
+    BrainScriptNetworkBuilder=[
+	
+        Qt = DynamicAxis{}
+		Kt = DynamicAxis{}
+        network=BS.Network.Load("$modelPath$")
+			  
+		#cos=(network.Qf*network.Kf)
+        outputNodes = (network.Qf:network.Kf:network.L:network.c:network.lf)
+    ]
+
+    reader = [
+        readerType = "CNTKTextFormatReader"
+        file = "./data/qk.evaluation.small.ctf"
+		keepDataInMemory=true
+		
+        input = [
+            Q = [ dim = $vocabDim$ ; format = "sparse" ]
+            K = [ dim = $vocabDim$ ; format = "sparse" ]
+			L = [ dim = 1; format = "dense" ]
+        ]
+   ]     
+]
+
